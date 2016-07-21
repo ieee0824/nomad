@@ -1,22 +1,36 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/doloopwhile/logrusltsv"
 )
 
+func isExists(filename string) bool {
+	_, err := os.Stat(filename)
+	return err == nil
+}
+
 func rename(src, dst string) error {
+	if isExists(dst) {
+		return errors.New(fmt.Sprintf("cannot moved: \"%s\" And \"%s\" is existed.", src, dst))
+	}
 	return os.Rename(src, dst)
 }
 
 func mv(src, dst string) error {
+	if isExists(dst) {
+		return errors.New(fmt.Sprintf("cannot moved: \"%s\" And \"%s\" is existed.", src, dst))
+	}
 	fSrc, err := os.Open(src)
 	if err != nil {
 		return err
@@ -66,8 +80,8 @@ func getFile(srcpath string, mem map[string]bool) []string {
 
 func getMonitored(srcpath string, t time.Duration, result chan<- []string) {
 	mem := map[string]bool{}
+	ticker := time.NewTicker(t)
 	for {
-		ticker := time.NewTicker(t)
 		select {
 		case <-ticker.C:
 			fileNames := getFile(srcpath, mem)
@@ -81,8 +95,8 @@ func monitoring(rate time.Duration, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	ticker := time.NewTicker(rate)
 	for {
-		ticker := time.NewTicker(rate)
 		select {
 		case <-ticker.C:
 			nowInfo, err := os.Lstat(name)
@@ -96,34 +110,46 @@ func monitoring(rate time.Duration, name string) (string, error) {
 	}
 }
 
+type fileInfo struct {
+	name string
+	e    error
+}
+
 // サイズが変化しなくなったら通知する
-func monitoringFile(srcDir string, samplingRate time.Duration, targets <-chan []string, result chan<- string) {
+func monitoringFile(srcDir string, samplingRate time.Duration, targets <-chan []string, result chan<- fileInfo) {
 	for {
 		select {
 		case names := <-targets:
 			for _, name := range names {
 				_, err := monitoring(samplingRate, fmt.Sprintf("%s/%s", srcDir, name))
 				if err != nil {
-					continue
+					result <- fileInfo{"", err}
+				} else {
+					result <- fileInfo{name, nil}
 				}
-				result <- name
 			}
 		}
 	}
 }
 
-func init() {
-	logrus.SetFormatter(&logrusltsv.Formatter{})
+type Ltsv struct {
+	Formatter       logrusltsv.Formatter
+	TimestampFormat string
+}
+
+func (l Ltsv) Format(entry *logrus.Entry) ([]byte, error) {
+	return l.Formatter.Format(entry)
 }
 
 func main() {
+	logrus.SetFormatter(&Ltsv{TimestampFormat: "2006-01-02 15:04:05"})
+
 	var (
 		src               string
 		dst               string
 		newFileCheckRate  int64
 		fileSizeCheckRate int64
 		logdir            string
-		logger            = logrus.New()
 	)
 
 	flag.StringVar(&src, "src", "", "source directory")
@@ -133,27 +159,42 @@ func main() {
 	flag.StringVar(&logdir, "log", "/dev/stderr", "log target")
 	flag.Parse()
 
-	if l, err := os.Create(logdir); err == nil {
-		logger.Out = l
+	if dst == "" || src == "" {
+		log.Fatalln("illegal args")
+	}
+
+	dst, _ = filepath.Abs(dst)
+	src, _ = filepath.Abs(src)
+	logdir, _ = filepath.Abs(logdir)
+
+	if l, err := os.OpenFile(logdir, os.O_APPEND|os.O_CREATE, 0644); err == nil {
+		logrus.SetOutput(l)
 	} else {
-		logger.Out = os.Stderr
+		logrus.SetOutput(os.Stderr)
 	}
 
 	monitored := make(chan []string, 1024)
-	noChangeFile := make(chan string, 1024)
+	noChangeFile := make(chan fileInfo, 1024)
 
 	go getMonitored(src, time.Duration(newFileCheckRate)*time.Second, monitored)
 	go monitoringFile(src, time.Duration(fileSizeCheckRate)*time.Second, monitored, noChangeFile)
 
 	for {
-		file := <-noChangeFile
-		if err := qmv(src+"/"+file, dst+"/"+file); err != nil {
-			logger.Errorln(err)
-		} else {
-			if err := os.Symlink(dst+"/"+file, src+"/"+file); err != nil {
-				logger.Errorln(err)
+		select {
+		case fileInfo := <-noChangeFile:
+			if fileInfo.e == nil {
+				file := fileInfo.name
+				if err := qmv(src+"/"+file, dst+"/"+file); err != nil {
+					logrus.Errorln(err)
+				} else {
+					if err := os.Symlink(dst+"/"+file, src+"/"+file); err != nil {
+						logrus.Errorln(err)
+					} else {
+						logrus.Infoln("moved complete: ", file)
+					}
+				}
 			} else {
-				logger.Infoln("moved complete: ", file)
+				logrus.Errorln(fileInfo.e)
 			}
 		}
 	}
