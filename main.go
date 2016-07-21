@@ -22,7 +22,7 @@ func mv(src, dst string) error {
 		return err
 	}
 	defer fSrc.Close()
-	fDst, err := os.Open(dst)
+	fDst, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
@@ -70,7 +70,8 @@ func getMonitored(srcpath string, t time.Duration, result chan<- []string) {
 		ticker := time.NewTicker(t)
 		select {
 		case <-ticker.C:
-			result <- getFile(srcpath, mem)
+			fileNames := getFile(srcpath, mem)
+			result <- fileNames
 		}
 	}
 }
@@ -132,7 +133,7 @@ func main() {
 	flag.StringVar(&logdir, "log", "/dev/stderr", "log target")
 	flag.Parse()
 
-	if l, err := os.Open(logdir); err == nil {
+	if l, err := os.Create(logdir); err == nil {
 		logger.Out = l
 	} else {
 		logger.Out = os.Stderr
