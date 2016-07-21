@@ -135,6 +135,7 @@ func monitoringFile(srcDir string, samplingRate time.Duration, targets <-chan []
 type Ltsv struct {
 	Formatter       logrusltsv.Formatter
 	TimestampFormat string
+	FullTimestamp   bool
 }
 
 func (l Ltsv) Format(entry *logrus.Entry) ([]byte, error) {
