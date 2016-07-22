@@ -168,7 +168,7 @@ func main() {
 	src, _ = filepath.Abs(src)
 	logdir, _ = filepath.Abs(logdir)
 
-	if l, err := os.OpenFile(logdir, os.O_APPEND|os.O_CREATE, 0644); err == nil {
+	if l, err := os.OpenFile(logdir, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644); err == nil {
 		logrus.SetOutput(l)
 	} else {
 		logrus.SetOutput(os.Stderr)
